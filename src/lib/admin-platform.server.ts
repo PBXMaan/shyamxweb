@@ -179,6 +179,17 @@ export const adminInspectGuild = createServerFn({ method: "GET" })
     const { botApi, botApiConfigured } = await import("@/lib/bot-api.server");
     if (!botApiConfigured()) return { live: false, details: null, modules: {} };
     const { recordAudit } = await import("@/lib/audit.server");
+    // Fetch the guild itself first. Inspect must not look successful when the
+    // primary guild endpoint failed; module failures are allowed and shown as
+    // unavailable instead of breaking the whole page.
+    let details: T.GuildDetails | null = null;
+    let detailsError: string | undefined;
+    try {
+      details = await botApi<T.GuildDetails>(`/api/v1/guilds/${data.guildId}`);
+    } catch (error) {
+      detailsError = (error as Error).message || "Could not load guild details.";
+    }
+
     const get = async (suffix: string) => {
       try {
         return await botApi<unknown>(`/api/v1/guilds/${data.guildId}${suffix}`);
@@ -203,16 +214,27 @@ export const adminInspectGuild = createServerFn({ method: "GET" })
       "autoreact",
       "invcrole",
     ];
-    const [details, ...rest] = await Promise.all([get(""), ...names.map((n) => get(`/${n}`))]);
-    await recordAudit(user, "admin.guild.inspect", `guild:${data.guildId}`);
+    const rest = await Promise.all(names.map((n) => get(`/${n}`)));
+    await recordAudit(
+      user,
+      "admin.guild.inspect",
+      `guild:${data.guildId}`,
+      details ? "success" : "failure",
+    );
     const modules: Record<string, unknown> = {};
     names.forEach((n, i) => (modules[n] = rest[i]));
-    return { live: details !== null, details, modules };
+    return {
+      live: details !== null,
+      details,
+      modules,
+      errorMessage: detailsError,
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any) as unknown as (opts: { data: { guildId: string } }) => Promise<{
   live: boolean;
   details: T.GuildDetails | null;
   modules: Record<string, unknown>;
+  errorMessage?: string;
 }>;
 
 /** Admin identities known to this deployment: configured IDs + actors seen in the audit log. IDs only. */
